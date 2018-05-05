@@ -15,7 +15,7 @@ import sys
 from sys import argv
 
 # name of the opencv window
-cv_window_name = "SSD Mobilenet"
+cv_window_name = "Vidimon Demo"
 
 # labels AKA classes.  The class IDs returned
 # are the indices into this list
@@ -26,12 +26,22 @@ labels = ('background',
           'motorbike', 'person', 'pottedplant',
           'sheep', 'sofa', 'train', 'tvmonitor')
 
+labels_mask = [0, 
+		        0, 1, 0, 0,
+	            0, 1, 1, 0, 0,
+                0, 0, 0, 1,
+                1, 1, 0, 
+                0, 0,0, 0]
+
+
+
 # the ssd mobilenet image width and height
 NETWORK_IMAGE_WIDTH = 300
 NETWORK_IMAGE_HEIGHT = 300
 
 # the minimal score for a box to be shown
-min_score_percent = 60
+#min_score_percent = 60
+min_score_percent = 0.1
 
 # the resize_window arg will modify these if its specified on the commandline
 resize_output = False
@@ -39,12 +49,24 @@ resize_output_width = 0
 resize_output_height = 0
 
 # read video files from this directory
-input_video_path = '.'
+#input_video_path = '.'
+input_video_path = '../../data/videos/'
+
+def rotateImage(image, angle):
+  image_center = tuple(numpy.array(image.shape[1::-1]) / 2)
+  rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
+  result = cv2.warpAffine(image, rot_mat, image.shape[1::-1], flags=cv2.INTER_LINEAR)
+  return result
+
+def cropImage(image, x, y, width, height):
+  return image[y:y+height, x:x+width]
 
 # create a preprocessed image from the source image that complies to the
 # network expectations and return it
-def preprocess_image(source_image):
+def preprocess_image(source_image):    
     resized_image = cv2.resize(source_image, (NETWORK_IMAGE_WIDTH, NETWORK_IMAGE_HEIGHT))
+
+    #resized_image = rotateImage(resized_image, 90)
     
     # trasnform values from range 0-255 to range -1.0 - 1.0
     resized_image = resized_image - 127.5
@@ -124,8 +146,8 @@ def overlay_on_image(display_image, object_info):
     cv2.putText(display_image, label_text, (label_left, label_bottom), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_text_color, 1)
 
     # display text to let user know how to quit
-    cv2.rectangle(display_image,(0, 0),(100, 15), (128, 128, 128), -1)
-    cv2.putText(display_image, "Q to Quit", (10, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+    #cv2.rectangle(display_image,(0, 0),(100, 15), (128, 128, 128), -1)
+    #cv2.putText(display_image, "Q to Quit", (10, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
 
 
 #return False if found invalid args or True if processed ok
@@ -166,7 +188,7 @@ def handle_args():
 def run_inference(image_to_classify, ssd_mobilenet_graph):
 
     # preprocess the image to meet nework expectations
-    resized_image = preprocess_image(image_to_classify)
+    resized_image = preprocess_image(image_to_classify)    
 
     # Send the image to the NCS as 16 bit floats
     ssd_mobilenet_graph.LoadTensor(resized_image.astype(numpy.float16), None)
@@ -207,8 +229,14 @@ def run_inference(image_to_classify, ssd_mobilenet_graph):
             x2 = min(int(output[base_index + 5] * image_to_classify.shape[0]), image_to_classify.shape[0]-1)
             y2 = min((output[base_index + 6] * image_to_classify.shape[1]), image_to_classify.shape[1]-1)
 
-            # overlay boxes and labels on to the image
-            overlay_on_image(image_to_classify, output[base_index:base_index + 7])
+            #print('width= ' + str(image_to_classify.shape[1]))
+            #print('height= ' + str(image_to_classify.shape[0]))           
+
+            if(labels_mask[int(output[base_index + 1])] != 0 and
+                (x2 - x1 < (2*image_to_classify.shape[1])/2) and
+		(y2 - y1 < (2*image_to_classify.shape[0])/2)):            
+	        # overlay boxes and labels on to the image
+                overlay_on_image(image_to_classify, output[base_index:base_index + 7])
 
 
 # prints usage information
@@ -260,7 +288,7 @@ def main():
 
     # get list of all the .mp4 files in the image directory
     input_video_filename_list = os.listdir(input_video_path)
-    input_video_filename_list = [i for i in input_video_filename_list if i.endswith('.mp4')]
+    input_video_filename_list = [i for i in input_video_filename_list if i.endswith('.mp90')]
 
     if (len(input_video_filename_list) < 1):
         # no images to show
@@ -268,13 +296,13 @@ def main():
         return 1
 
     cv2.namedWindow(cv_window_name)
-    cv2.moveWindow(cv_window_name, 10,  10)
+    cv2.moveWindow(cv_window_name, 10,  10)    
 
     exit_app = False
     while (True):
         for input_video_file in input_video_filename_list :
 
-            cap = cv2.VideoCapture(input_video_file)
+            cap = cv2.VideoCapture(input_video_path + input_video_file)
 
             actual_frame_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
             actual_frame_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -293,8 +321,17 @@ def main():
             start_time = time.time()
             end_time = start_time
 
+            ret, img = cap.read()            
+            size = img.shape[1], img.shape[0]
+
+            # save results in a video file
+            #fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            fourcc = cv2.VideoWriter_fourcc(*'H264')  
+            video=cv2.VideoWriter(input_video_path + input_video_file + '_output.avi',fourcc,10,size)
+
             while(True):
-                ret, display_image = cap.read()
+                ret, source_image = cap.read()
+                display_image = cropImage(source_image, 700, 350, 300, 300);
 
                 if (not ret):
                     end_time = time.time()
@@ -309,6 +346,8 @@ def main():
                     exit_app = True
                     break
 
+                #display_image = rotateImage(display_image, 90)
+
                 run_inference(display_image, ssd_mobilenet_graph)
 
                 if (resize_output):
@@ -316,6 +355,8 @@ def main():
                                                (resize_output_width, resize_output_height),
                                                cv2.INTER_LINEAR)
                 cv2.imshow(cv_window_name, display_image)
+
+                video.write(display_image)
 
                 raw_key = cv2.waitKey(1)
                 if (raw_key != -1):
@@ -329,6 +370,7 @@ def main():
             print('Frames per Second: ' + str(frames_per_second))
 
             cap.release()
+           
 
             if (exit_app):
                 break;
@@ -339,6 +381,8 @@ def main():
     # Clean up the graph and the device
     ssd_mobilenet_graph.DeallocateGraph()
     device.CloseDevice()
+
+    video.release()
 
 
     cv2.destroyAllWindows()
